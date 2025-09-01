@@ -1,0 +1,89 @@
+#include <cstring>
+#include <infiniband/verbs.h>
+#include <iostream>
+#include <unistd.h>
+
+int main() {
+  // 1. Open device
+  ibv_device **dev_list = ibv_get_device_list(nullptr);
+  ibv_context *ctx = ibv_open_device(dev_list[0]);
+
+  // 2. Protection domain
+  ibv_pd *pd = ibv_alloc_pd(ctx);
+
+  // 3. Completion queue
+  ibv_cq *cq = ibv_create_cq(ctx, 1, nullptr, nullptr, 0);
+
+  // 4. Create RC QP
+  ibv_qp_init_attr qp_attr{};
+  qp_attr.send_cq = cq;
+  qp_attr.recv_cq = cq;
+  qp_attr.qp_type = IBV_QPT_RC;
+  qp_attr.cap.max_send_wr = 1;
+  qp_attr.cap.max_recv_wr = 1;
+  qp_attr.cap.max_send_sge = 1;
+  qp_attr.cap.max_recv_sge = 1;
+
+  ibv_qp *qp = ibv_create_qp(pd, &qp_attr);
+
+  // 5. Memory
+  char buf[16] = {};
+  ibv_mr *mr = ibv_reg_mr(pd, buf, sizeof(buf),
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+
+  // 6. Move QP to INIT
+  ibv_qp_attr attr{};
+  attr.qp_state = IBV_QPS_INIT;
+  attr.port_num = 1;
+  ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_PORT);
+
+  // 7. Post receive
+  ibv_sge sge{};
+  sge.addr = (uintptr_t)buf;
+  sge.length = sizeof(buf);
+  sge.lkey = mr->lkey;
+
+  ibv_recv_wr rr{};
+  rr.sg_list = &sge;
+  rr.num_sge = 1;
+  rr.next = nullptr;
+  ibv_recv_wr *bad_rr;
+  ibv_post_recv(qp, &rr, &bad_rr);
+
+  // 8. Print connection info for client
+  std::cout << "Server QP number: " << qp->qp_num << std::endl;
+  std::cout << "Send this to client" << std::endl;
+
+  uint32_t client_qpn;
+  std::cout << "Enter client QP number: ";
+  std::cin >> client_qpn;
+
+  // 9. Move QP to RTR
+  attr.qp_state = IBV_QPS_RTR;
+  attr.dest_qp_num = client_qpn;
+  attr.rq_psn = 0;
+  attr.path_mtu = IBV_MTU_256;
+  ibv_modify_qp(qp, &attr,
+                IBV_QP_STATE | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+                    IBV_QP_PATH_MTU);
+
+  // 10. Move QP to RTS
+  attr.qp_state = IBV_QPS_RTS;
+  attr.sq_psn = 0;
+  ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN);
+
+  // 11. Poll completion queue
+  ibv_wc wc;
+  while (ibv_poll_cq(cq, 1, &wc) == 0) {
+  }
+
+  std::cout << "Server received: " << buf << std::endl;
+
+  // 12. Cleanup
+  ibv_dereg_mr(mr);
+  ibv_destroy_qp(qp);
+  ibv_destroy_cq(cq);
+  ibv_dealloc_pd(pd);
+  ibv_close_device(ctx);
+  ibv_free_device_list(dev_list);
+}
