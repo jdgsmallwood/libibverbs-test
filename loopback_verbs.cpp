@@ -169,14 +169,6 @@ int main() {
     return 1;
   }
 
-  printf("GID: ");
-  for (int i = 0; i < 16; i++) {
-    printf("%02x", gid.raw[i]);
-    if (i == 7)
-      printf(":");
-  }
-  printf("\n");
-
   std::cout << "Create send\n";
   ibv_sge sge_send{};
   sge_send.addr = (uintptr_t)send_buf;
